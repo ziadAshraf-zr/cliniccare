@@ -1,0 +1,613 @@
+// ClinicCare — مخطط Prisma الرئيسي (القسم 4 من الخطة التقنية).
+// القيود المتقدمة (Exclusion constraint، Trigger، REVOKE) لا يدعمها Prisma
+// تصريحيًا، وتُضاف بـ SQL يدوي في prisma/migrations (انظر README القسم).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  // Prisma CLI يستخدم رابط المالك (migrator) عبر MIGRATE_DATABASE_URL للـ migrations،
+  // والتطبيق وقت التشغيل يستخدم DATABASE_URL (مستخدم محدود الصلاحيات، القسم 13).
+  url      = env("MIGRATE_DATABASE_URL")
+}
+
+// ========================= Enums =========================
+// يجب أن تطابق قيم packages/shared/src/enums.ts حرفيًا.
+
+enum UserRole {
+  ADMIN
+  RECEPTIONIST
+  DOCTOR
+  PATIENT
+}
+
+enum UserStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum Sex {
+  MALE
+  FEMALE
+  OTHER
+  UNKNOWN
+}
+
+enum AllergySeverity {
+  MILD
+  MODERATE
+  SEVERE
+}
+
+enum AppointmentStatus {
+  PENDING
+  CONFIRMED
+  CHECKED_IN
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+enum EncounterStatus {
+  DRAFT
+  SIGNED
+  ENTERED_IN_ERROR
+}
+
+enum DiagnosisStatus {
+  ACTIVE
+  RESOLVED
+}
+
+enum PrescriptionStatus {
+  DRAFT
+  ISSUED
+}
+
+enum DocumentType {
+  LAB_RESULT
+  IMAGING
+  REFERRAL
+  PRESCRIPTION
+  OTHER
+}
+
+enum DocumentStatus {
+  DRAFT
+  PUBLISHED
+  RETRACTED
+}
+
+enum ConsentPurpose {
+  PORTAL_ACCESS
+  EMAIL_NOTIFICATIONS
+  DATA_EXPORT
+}
+
+enum ConsentStatus {
+  GRANTED
+  WITHDRAWN
+}
+
+enum ConsentMethod {
+  PORTAL
+  IN_PERSON
+}
+
+enum NotificationType {
+  APPOINTMENT_CONFIRMED
+  APPOINTMENT_REMINDER
+  APPOINTMENT_CANCELLED
+  PRESCRIPTION_ISSUED
+  DOCUMENT_PUBLISHED
+  PORTAL_INVITATION
+}
+
+enum OutboxStatus {
+  PENDING
+  PROCESSING
+  SENT
+  FAILED
+}
+
+// ========================= مجموعة الهوية =========================
+
+model Clinic {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name          String
+  timezone      String   @default("Africa/Cairo")
+  defaultLocale String   @default("ar") @map("default_locale")
+  status        String   @default("ACTIVE")
+  isDemo        Boolean  @default(true) @map("is_demo")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  users         User[]
+  practitioners Practitioner[]
+  services      Service[]
+  patients      Patient[]
+  appointments  Appointment[]
+  encounters    Encounter[]
+  documents     Document[]
+  auditEvents   AuditEvent[]
+  counters      ClinicCounter[]
+
+  @@map("clinics")
+}
+
+model User {
+  id              String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clinicId        String     @map("clinic_id") @db.Uuid
+  email           String
+  passwordHash    String     @map("password_hash")
+  status          UserStatus @default(ACTIVE)
+  failedLogins    Int        @default(0) @map("failed_logins")
+  lockedUntil     DateTime?  @map("locked_until") @db.Timestamptz
+  lastLoginAt     DateTime?  @map("last_login_at") @db.Timestamptz
+  preferredLocale String     @default("ar") @map("preferred_locale")
+  notifyByEmail   Boolean    @default(true) @map("notify_by_email")
+  isDemo          Boolean    @default(true) @map("is_demo")
+  createdAt       DateTime   @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime   @updatedAt @map("updated_at") @db.Timestamptz
+
+  clinic           Clinic             @relation(fields: [clinicId], references: [id])
+  roles            UserRoleAssignment[]
+  sessions         Session[]
+  practitioner     Practitioner?
+  patientAccount   PatientAccount?
+  notifications    Notification[]
+  invitationsIssued PatientInvitation[] @relation("InvitationCreatedBy")
+
+  @@index([clinicId])
+  @@map("users")
+  // UNIQUE(clinic_id, lower(email)) فهرس فريد على lower(email) يُضاف بـ SQL يدوي
+  // (Prisma لا يعبّر تصريحيًا عن فهارس بتعبير دالة، القسم 4)
+}
+
+model UserRoleAssignment {
+  userId String   @map("user_id") @db.Uuid
+  role   UserRole
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, role])
+  @@map("user_roles")
+}
+
+model Session {
+  id           String    @id @db.VarChar(64) // تجزئة SHA-256 للمعرّف العشوائي 256 بت
+  userId       String    @map("user_id") @db.Uuid
+  expiresAt    DateTime  @map("expires_at") @db.Timestamptz
+  lastSeenAt   DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz
+  ip           String?
+  userAgent    String?   @map("user_agent")
+  revokedAt    DateTime? @map("revoked_at") @db.Timestamptz
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model PatientInvitation {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  patientId String    @map("patient_id") @db.Uuid
+  tokenHash String    @unique @map("token_hash") @db.VarChar(64)
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz
+  usedAt    DateTime? @map("used_at") @db.Timestamptz
+  createdBy String    @map("created_by") @db.Uuid
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  creator User    @relation("InvitationCreatedBy", fields: [createdBy], references: [id])
+
+  @@map("patient_invitations")
+}
+
+// ========================= مجموعة العيادة =========================
+
+model Practitioner {
+  id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId             String   @unique @map("user_id") @db.Uuid
+  specialty          String?
+  licenseNo          String?  @map("license_no") // ترخيص تجريبي، لا قيمة قانونية
+  defaultSlotMinutes Int      @default(20) @map("default_slot_minutes")
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt          DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workingHours  WorkingHours[]
+  timeOff       TimeOff[]
+  appointments  Appointment[]
+  encounters    Encounter[]
+
+  @@map("practitioners")
+}
+
+model WorkingHours {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  practitionerId String   @map("practitioner_id") @db.Uuid
+  weekday        Int      // 0 = الأحد .. 6 = السبت (packages/shared Weekday)
+  startTime      DateTime @map("start_time") @db.Time
+  endTime        DateTime @map("end_time") @db.Time
+
+  practitioner Practitioner @relation(fields: [practitionerId], references: [id], onDelete: Cascade)
+
+  @@index([practitionerId, weekday])
+  @@map("working_hours")
+  // CHECK(end_time > start_time) يُضاف بـ SQL يدوي (migrations/..._constraints.sql)
+}
+
+model TimeOff {
+  id             String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  practitionerId String                 @map("practitioner_id") @db.Uuid
+  // نوع tstzrange غير مدعوم تصريحيًا في Prisma؛ يُقرأ ويُكتب بـ $queryRaw فقط
+  // (استثناء موثّق، القسم 15). الـ Exclusion constraint على (practitioner_id, range)
+  // والتحقق NOT NULL يُضافان بـ SQL يدوي.
+  range          Unsupported("tstzrange")
+  reason         String?
+
+  practitioner Practitioner @relation(fields: [practitionerId], references: [id], onDelete: Cascade)
+
+  @@index([practitionerId])
+  @@map("time_off")
+}
+
+model Service {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clinicId        String   @map("clinic_id") @db.Uuid
+  nameAr          String   @map("name_ar")
+  nameEn          String   @map("name_en")
+  durationMinutes Int      @map("duration_minutes")
+  priceCents      Int      @map("price_cents")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  clinic       Clinic        @relation(fields: [clinicId], references: [id])
+  appointments Appointment[]
+
+  @@index([clinicId])
+  @@map("services")
+}
+
+// ========================= مجموعة المرضى =========================
+
+model Patient {
+  id                      String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clinicId                String   @map("clinic_id") @db.Uuid
+  medicalRecordNo         String   @map("medical_record_no")
+  fullName                String   @map("full_name")
+  dob                     DateTime @db.Date
+  sex                     Sex
+  phoneE164               String   @map("phone_e164")
+  email                   String?
+  address                 String?
+  emergencyContactName    String?  @map("emergency_contact_name")
+  emergencyContactPhone   String?  @map("emergency_contact_phone")
+  isDemo                  Boolean  @default(true) @map("is_demo")
+  createdAt               DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt               DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  clinic       Clinic             @relation(fields: [clinicId], references: [id])
+  account      PatientAccount?
+  allergies    Allergy[]
+  appointments Appointment[]
+  encounters   Encounter[]
+  documents    Document[]
+  consents     Consent[]
+  invitations  PatientInvitation[]
+
+  @@unique([clinicId, medicalRecordNo], map: "patients_clinic_mrn_key")
+  @@index([clinicId, phoneE164])
+  @@map("patients")
+  // فهرس pg_trgm على full_name يُضاف بـ SQL يدوي (كشف التكرار، القسم 4)
+}
+
+model PatientAccount {
+  userId    String   @id @map("user_id") @db.Uuid
+  patientId String   @unique @map("patient_id") @db.Uuid
+  linkedAt  DateTime @default(now()) @map("linked_at") @db.Timestamptz
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@map("patient_accounts")
+}
+
+model Allergy {
+  id          String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  patientId   String          @map("patient_id") @db.Uuid
+  substance   String
+  reaction    String?
+  severity    AllergySeverity
+  recordedBy  String          @map("recorded_by") @db.Uuid
+  createdAt   DateTime        @default(now()) @map("created_at") @db.Timestamptz
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId])
+  @@map("allergies")
+}
+
+// ========================= مجموعة المواعيد =========================
+
+model Appointment {
+  id              String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clinicId        String            @map("clinic_id") @db.Uuid
+  patientId       String            @map("patient_id") @db.Uuid
+  practitionerId  String            @map("practitioner_id") @db.Uuid
+  serviceId       String            @map("service_id") @db.Uuid
+  startAt         DateTime          @map("start_at") @db.Timestamptz
+  endAt           DateTime          @map("end_at") @db.Timestamptz
+  status          AppointmentStatus @default(PENDING)
+  cancelReason    String?           @map("cancel_reason")
+  checkedInAt     DateTime?         @map("checked_in_at") @db.Timestamptz
+  reminderSentAt  DateTime?         @map("reminder_sent_at") @db.Timestamptz
+  createdAt       DateTime          @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime          @updatedAt @map("updated_at") @db.Timestamptz
+
+  clinic       Clinic       @relation(fields: [clinicId], references: [id])
+  patient      Patient      @relation(fields: [patientId], references: [id])
+  practitioner Practitioner @relation(fields: [practitionerId], references: [id])
+  service      Service      @relation(fields: [serviceId], references: [id])
+  encounter    Encounter?
+
+  @@index([clinicId, startAt])
+  @@index([practitionerId, startAt])
+  @@map("appointments")
+  // CHECK(end_at > start_at) + Exclusion constraint لمنع التعارض: SQL يدوي (القسم 4)
+}
+
+// ========================= مجموعة الزيارة =========================
+
+model Encounter {
+  id              String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clinicId        String          @map("clinic_id") @db.Uuid
+  patientId       String          @map("patient_id") @db.Uuid
+  practitionerId  String          @map("practitioner_id") @db.Uuid
+  appointmentId   String?         @unique @map("appointment_id") @db.Uuid
+  status          EncounterStatus @default(DRAFT)
+  chiefComplaint  String?         @map("chief_complaint")
+  history         String?
+  examination     String?
+  assessment      String?
+  plan            String?
+  version         Int             @default(1) // للتحقق المتفائل (If-Match، القسم 6)
+  signedAt        DateTime?       @map("signed_at") @db.Timestamptz
+  signedBy        String?         @map("signed_by") @db.Uuid
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime        @updatedAt @map("updated_at") @db.Timestamptz
+
+  clinic       Clinic                @relation(fields: [clinicId], references: [id])
+  patient      Patient               @relation(fields: [patientId], references: [id])
+  practitioner Practitioner          @relation(fields: [practitionerId], references: [id])
+  appointment  Appointment?          @relation(fields: [appointmentId], references: [id])
+  amendments   EncounterAmendment[]
+  vitals       Vital[]
+  diagnoses    Diagnosis[]
+  prescription Prescription?
+
+  @@index([patientId, createdAt(sort: Desc)])
+  @@map("encounters")
+  // Trigger يمنع UPDATE على الحقول السريرية بعد status = SIGNED (SQL يدوي)
+}
+
+model EncounterAmendment {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  encounterId   String   @map("encounter_id") @db.Uuid
+  amendedBy     String   @map("amended_by") @db.Uuid
+  reason        String
+  addendumText  String   @map("addendum_text")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  encounter Encounter @relation(fields: [encounterId], references: [id], onDelete: Cascade)
+
+  @@index([encounterId])
+  @@map("encounter_amendments")
+}
+
+model Vital {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  encounterId String   @map("encounter_id") @db.Uuid
+  patientId   String   @map("patient_id") @db.Uuid
+  code        String   // LOINC، القسم 11
+  valueNumeric Decimal @map("value_numeric") @db.Decimal(8, 2)
+  unit        String   // UCUM
+  measuredAt  DateTime @default(now()) @map("measured_at") @db.Timestamptz
+  recordedBy  String   @map("recorded_by") @db.Uuid
+
+  encounter Encounter @relation(fields: [encounterId], references: [id], onDelete: Cascade)
+
+  @@index([patientId])
+  @@map("vitals")
+}
+
+model Diagnosis {
+  id          String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  encounterId String          @map("encounter_id") @db.Uuid
+  patientId   String          @map("patient_id") @db.Uuid
+  icd10Code   String          @map("icd10_code")
+  displayAr   String          @map("display_ar")
+  displayEn   String          @map("display_en")
+  status      DiagnosisStatus @default(ACTIVE)
+
+  encounter Encounter @relation(fields: [encounterId], references: [id], onDelete: Cascade)
+
+  @@index([patientId])
+  @@map("diagnoses")
+}
+
+// ========================= مجموعة الأدوية =========================
+
+model MedicationCatalogItem {
+  id       String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  nameAr   String  @map("name_ar")
+  nameEn   String  @map("name_en")
+  form     String  // قرص، شراب، حقن ... (بيانات تجريبية فقط)
+  strength String
+
+  items PrescriptionItem[]
+
+  @@map("medications_catalog")
+}
+
+model Prescription {
+  id              String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  encounterId     String             @unique @map("encounter_id") @db.Uuid
+  patientId       String             @map("patient_id") @db.Uuid
+  status          PrescriptionStatus @default(DRAFT)
+  issuedAt        DateTime?          @map("issued_at") @db.Timestamptz
+  pdfDocumentId   String?            @unique @map("pdf_document_id") @db.Uuid
+
+  encounter   Encounter          @relation(fields: [encounterId], references: [id], onDelete: Cascade)
+  pdfDocument Document?          @relation(fields: [pdfDocumentId], references: [id])
+  items       PrescriptionItem[]
+
+  @@index([patientId])
+  @@map("prescriptions")
+}
+
+model PrescriptionItem {
+  id              String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  prescriptionId  String  @map("prescription_id") @db.Uuid
+  medicationId    String  @map("medication_id") @db.Uuid
+  doseText        String  @map("dose_text")
+  route           String
+  frequency       String
+  durationDays    Int     @map("duration_days")
+  instructions    String?
+
+  prescription Prescription          @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
+  medication   MedicationCatalogItem @relation(fields: [medicationId], references: [id])
+
+  @@index([prescriptionId])
+  @@map("prescription_items")
+}
+
+// ========================= مجموعة المستندات =========================
+
+model Document {
+  id            String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clinicId      String         @map("clinic_id") @db.Uuid
+  patientId     String         @map("patient_id") @db.Uuid
+  encounterId   String?        @map("encounter_id") @db.Uuid
+  type          DocumentType
+  title         String
+  storageKey    String         @unique @map("storage_key")
+  mimeType      String         @map("mime_type")
+  sizeBytes     Int            @map("size_bytes")
+  sha256        String
+  status        DocumentStatus @default(DRAFT)
+  publishedAt   DateTime?      @map("published_at") @db.Timestamptz
+  publishedBy   String?        @map("published_by") @db.Uuid
+  isDemo        Boolean        @default(true) @map("is_demo")
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz
+
+  clinic       Clinic        @relation(fields: [clinicId], references: [id])
+  patient      Patient       @relation(fields: [patientId], references: [id])
+  prescription Prescription?
+
+  @@index([patientId, status])
+  @@map("documents")
+  // View عرض فقط: portal_visible_documents (WHERE status = 'PUBLISHED') — SQL يدوي
+}
+
+// ========================= مجموعة الموافقات والتدقيق =========================
+
+model ConsentText {
+  purpose ConsentPurpose
+  version Int
+  bodyAr  String         @map("body_ar")
+  bodyEn  String         @map("body_en")
+
+  consents Consent[]
+
+  @@id([purpose, version])
+  @@map("consent_texts")
+}
+
+model Consent {
+  id          String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  patientId   String        @map("patient_id") @db.Uuid
+  purpose     ConsentPurpose
+  textVersion Int           @map("text_version")
+  status      ConsentStatus @default(GRANTED)
+  capturedAt  DateTime      @default(now()) @map("captured_at") @db.Timestamptz
+  withdrawnAt DateTime?     @map("withdrawn_at") @db.Timestamptz
+  method      ConsentMethod
+
+  patient     Patient     @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  consentText ConsentText @relation(fields: [purpose, textVersion], references: [purpose, version])
+
+  @@index([patientId, purpose])
+  @@map("consents")
+}
+
+model AuditEvent {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clinicId     String   @map("clinic_id") @db.Uuid
+  actorId      String?  @map("actor_id") @db.Uuid
+  actorRole    String?  @map("actor_role")
+  action       String
+  resourceType String   @map("resource_type")
+  resourceId   String?  @map("resource_id") @db.Uuid
+  patientId    String?  @map("patient_id") @db.Uuid
+  outcome      String   @default("SUCCESS")
+  ip           String?
+  requestId    String?  @map("request_id")
+  occurredAt   DateTime @default(now()) @map("occurred_at") @db.Timestamptz
+  metadata     Json?
+
+  clinic Clinic @relation(fields: [clinicId], references: [id])
+
+  @@index([clinicId, occurredAt])
+  @@index([patientId])
+  @@index([actorId])
+  @@map("audit_events")
+  // INSERT/SELECT فقط لمستخدم التطبيق؛ REVOKE UPDATE/DELETE بـ SQL يدوي (القسم 4)
+}
+
+// ========================= مجموعة التشغيل =========================
+
+model Notification {
+  id      String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId  String            @map("user_id") @db.Uuid
+  type    NotificationType
+  payload Json
+  readAt  DateTime?         @map("read_at") @db.Timestamptz
+  createdAt DateTime        @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+  @@map("notifications")
+}
+
+model Outbox {
+  id        String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  type      String
+  payload   Json
+  status    OutboxStatus @default(PENDING)
+  attempts  Int          @default(0)
+  runAt     DateTime     @default(now()) @map("run_at") @db.Timestamptz
+  lastError String?      @map("last_error")
+  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([status, runAt])
+  @@map("outbox")
+}
+
+model ClinicCounter {
+  clinicId  String @map("clinic_id") @db.Uuid
+  name      String
+  nextValue Int    @default(1) @map("next_value")
+
+  clinic Clinic @relation(fields: [clinicId], references: [id])
+
+  @@id([clinicId, name])
+  @@map("clinic_counters")
+}

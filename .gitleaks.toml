@@ -1,0 +1,9 @@
+# إعداد gitleaks: يفحص كل الفروع بحثًا عن أسرار مسربة قبل الدمج (القسم 13 و15).
+title = "cliniccare-gitleaks"
+
+[allowlist]
+description = "ملفات أمثلة ومولّدة لا تحمل أسرارًا حقيقية"
+paths = [
+  '''\.env\.example$''',
+  '''pnpm-lock\.yaml$''',
+]

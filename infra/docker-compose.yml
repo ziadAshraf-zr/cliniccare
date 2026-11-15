@@ -1,0 +1,86 @@
+name: cliniccare
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: cliniccare
+      POSTGRES_USER: cliniccare_migrator
+      POSTGRES_PASSWORD: ${DB_MIGRATOR_PASSWORD:-change_me_migrator}
+      DB_APP_PASSWORD: ${DB_APP_PASSWORD:-change_me_app}
+    ports:
+      - '127.0.0.1:5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U cliniccare_migrator -d cliniccare']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minio_dev_access}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minio_dev_secret_change_me}
+    ports:
+      - '127.0.0.1:9000:9000'
+      - '127.0.0.1:9001:9001'
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ['/bin/sh', '/minio-init.sh']
+    environment:
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minio_dev_access}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minio_dev_secret_change_me}
+      S3_BUCKET: ${S3_BUCKET:-cliniccare-docs}
+    volumes:
+      - ./minio-init.sh:/minio-init.sh:ro
+
+  mailhog:
+    image: mailhog/mailhog:latest
+    ports:
+      - '127.0.0.1:8025:8025' # واجهة عرض البريد التجريبي
+      - '127.0.0.1:1025:1025' # SMTP
+
+  api:
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    env_file: ../.env
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    ports:
+      - '127.0.0.1:4000:4000'
+    command: sh -c "pnpm prisma migrate deploy && node apps/api/dist/main.js"
+
+  web:
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
+    env_file: ../.env
+    depends_on:
+      - api
+    ports:
+      - '127.0.0.1:3000:3000'
+
+volumes:
+  pgdata:
+  minio-data:
