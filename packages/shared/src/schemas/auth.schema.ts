@@ -1,4 +1,18 @@
 import { z } from 'zod';
+import type { UserRole } from '../enums';
+
+/**
+ * شكل المستخدم المُصادَق كما يضعه SessionGuard على الطلب، وكما تُرجعه
+ * /auth/login و/auth/me (القسم 5 و6 من الخطة التقنية). لا يحتوي أبدًا على
+ * passwordHash أو أي حقل داخلي آخر.
+ */
+export interface AuthenticatedUser {
+  id: string;
+  clinicId: string;
+  email: string;
+  roles: UserRole[];
+  preferredLocale: string;
+}
 
 export const loginSchema = z.object({
   email: z.string().trim().toLowerCase().email(),

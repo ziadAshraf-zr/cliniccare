@@ -1,11 +1,15 @@
 import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { APP_GUARD } from '@nestjs/core';
 import { LoggerModule } from 'nestjs-pino';
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 
 import { PrismaModule } from './prisma/prisma.module';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
+import { SessionGuard } from './common/guards/session.guard';
+import { ClinicContextGuard } from './common/guards/clinic-context.guard';
+import { PermissionsGuard } from './common/guards/permissions.guard';
 
 import { HealthModule } from './modules/health/health.module';
 import { AuthModule } from './modules/auth/auth.module';
@@ -61,6 +65,13 @@ import { NotificationModule } from './modules/notification/notification.module';
     ConsentAuditModule,
     InteropModule,
     NotificationModule,
+  ],
+  providers: [
+    // السلسلة الرباعية بالترتيب (القسم 5 و7): جلسة ← سياق عيادة ← صلاحية.
+    // الحارس الرابع (Policy الخاص بمورد) يُنفَّذ داخل كل Service لا هنا.
+    { provide: APP_GUARD, useClass: SessionGuard },
+    { provide: APP_GUARD, useClass: ClinicContextGuard },
+    { provide: APP_GUARD, useClass: PermissionsGuard },
   ],
 })
 export class AppModule implements NestModule {
