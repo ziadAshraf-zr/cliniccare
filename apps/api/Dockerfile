@@ -7,7 +7,7 @@ FROM base AS deps
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml* tsconfig.base.json ./
 COPY packages/shared/package.json packages/shared/package.json
 COPY apps/api/package.json apps/api/package.json
-RUN pnpm install --frozen-lockfile --filter @cliniccare/api... || pnpm install
+RUN pnpm install --frozen-lockfile --filter . --filter @cliniccare/api... || pnpm install
 
 FROM deps AS build
 COPY . .

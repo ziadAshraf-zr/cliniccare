@@ -12,6 +12,9 @@ RUN pnpm install --frozen-lockfile --filter @cliniccare/web... || pnpm install
 FROM deps AS build
 COPY . .
 RUN pnpm --filter @cliniccare/shared build || true
+# رابط الـ API العام يُثبَّت وقت البناء لأن next.config rewrites تُحسب عند build
+ARG API_INTERNAL_URL
+ENV API_INTERNAL_URL=${API_INTERNAL_URL}
 RUN pnpm --filter @cliniccare/web build
 
 FROM base AS runtime
