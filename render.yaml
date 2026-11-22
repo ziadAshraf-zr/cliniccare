@@ -21,8 +21,9 @@ services:
         value: production
       - key: MIGRATE_DATABASE_URL
         fromDatabase: { name: cliniccare-db, property: connectionString }
+      # اكتبها بنفسك: حروف وأرقام و _ فقط (بدون رموز)، 20 خانة على الأقل
       - key: DB_APP_PASSWORD
-        generateValue: true
+        sync: false
       # يُركَّب DATABASE_URL يدويًا بعد أول نشر (انظر DEPLOY.md)
       - key: DATABASE_URL
         sync: false
