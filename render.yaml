@@ -1,0 +1,51 @@
+# Render Blueprint: ينشئ قاعدة Postgres + خدمة API + خدمة الواجهة من هذا الـ repo.
+# كل push على main ينشر تلقائيًا (autoDeploy). بيانات اصطناعية فقط.
+databases:
+  - name: cliniccare-db
+    plan: free
+    databaseName: cliniccare
+    user: cliniccare_migrator
+
+services:
+  - type: web
+    name: cliniccare-api
+    runtime: docker
+    plan: free
+    dockerfilePath: apps/api/Dockerfile
+    dockerContext: .
+    dockerCommand: sh infra/deploy/api-start.sh
+    healthCheckPath: /health/live
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MIGRATE_DATABASE_URL
+        fromDatabase: { name: cliniccare-db, property: connectionString }
+      - key: DB_APP_PASSWORD
+        generateValue: true
+      # يُركَّب DATABASE_URL يدويًا بعد أول نشر (انظر DEPLOY.md)
+      - key: DATABASE_URL
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: WEB_ORIGIN
+        sync: false
+      - key: DEFAULT_CLINIC_ID
+        value: 00000000-0000-4000-8000-000000000001
+      - key: SEED_DEMO_DATA
+        value: "true"
+      - key: SESSION_TTL_MINUTES
+        value: "30"
+      - key: SESSION_ABSOLUTE_HOURS
+        value: "8"
+
+  - type: web
+    name: cliniccare-web
+    runtime: docker
+    plan: free
+    dockerfilePath: apps/web/Dockerfile
+    dockerContext: .
+    autoDeploy: true
+    envVars:
+      - key: API_INTERNAL_URL
+        sync: false
