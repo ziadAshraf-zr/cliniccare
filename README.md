@@ -111,8 +111,19 @@ pnpm test        # اختبارات الوحدة (حاليًا: apps/api)
   التدقيق (`USER_CREATED`، `ROLE_CHANGED`، `USER_DISABLED`، `USER_ENABLED`،
   `USER_UPDATED`) تُكتب في نفس المعاملة بأسماء الحقول لا قيمها. مستخدمو
   عيادة أخرى وحسابات المرضى يرجعون 404. مغطّاة باختبارات وحدة.
+- ✅ **Clinic Module — بيانات العيادة والإعدادات والخدمات والأطباء**:
+  `GET/PATCH /clinic` (الاسم، المنطقة الزمنية IANA، اللغة الافتراضية) و`GET/POST /services`
+  و`PATCH /services/:id` بصلاحية `clinic:manage`؛ `GET/POST /practitioners` بصلاحية
+  `user:manage`؛ `PUT /practitioners/:id/working-hours` (استبدال كامل لجدول الأسبوع بتوقيت
+  العيادة المحلي) و`POST /practitioners/:id/time-off` بصلاحية `clinic:manage`. لا حذف فعلي
+  للخدمات (مرتبطة بالمواعيد). الطبيب يُسجَّل من مستخدم فعّال بدور DOCTOR في نفس العيادة فقط،
+  وعزل العيادة للأطباء يمر عبر `user.clinicId`. تداخل الإجازات يفصل فيه قيد الاستبعاد في
+  القاعدة (`23P01` ← `TIME_OFF_OVERLAP`)، واستبدال الجدول يقفل صف الطبيب. أحداث التدقيق
+  (`CLINIC_UPDATED`، `SERVICE_CREATED/UPDATED`، `PRACTITIONER_CREATED`،
+  `WORKING_HOURS_UPDATED`، `TIME_OFF_CREATED`) تُكتب في نفس المعاملة بأسماء الحقول لا قيمها.
+  مغطّاة باختبارات وحدة.
 - ⏳ **القادم**: باقي الـ Modules بالترتيب الوارد في الخطة التقنية
-  (شاشة `/admin/users` في الواجهة، ثم Clinic وPatient وغيرهما).
+  (شاشة `/admin/users` وشاشات الإعدادات في الواجهة، ثم Patient وScheduling وغيرهما).
 
 ## تنبيه أمني
 
